@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  es-bytehouse-sync:
+    build: .
+    container_name: es-bytehouse-sync
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 可在这里覆盖 .env 中的配置
+      # SKIP_FULL_SYNC: "true"  # 跳过全量同步，仅增量
+      TZ: Asia/Shanghai
+    volumes:
+      # 可选：挂载日志目录
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    networks:
+      - sync-network
+
+networks:
+  sync-network:
+    driver: bridge
