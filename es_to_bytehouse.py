@@ -567,6 +567,29 @@ ORDER BY (index_name)"""
                 else:
                     # 列表元素是简单类型，转为 JSON 字符串
                     result[full_key] = json.dumps(value, ensure_ascii=False)
+            elif isinstance(value, str):
+                # 字符串类型：尝试解析为 JSON
+                if value and (value.startswith('{') or value.startswith('[')):
+                    try:
+                        parsed = json.loads(value)
+                        if isinstance(parsed, dict):
+                            # JSON 对象，展开
+                            nested = self.flatten_document(parsed, full_key)
+                            result.update(nested)
+                        elif isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+                            # JSON 数组且元素是对象，展开
+                            for idx, item in enumerate(parsed):
+                                if isinstance(item, dict):
+                                    item_nested = self.flatten_document(item, f"{full_key}_{idx}")
+                                    result.update(item_nested)
+                        else:
+                            # 其他 JSON 类型，保持原始字符串
+                            result[full_key] = value
+                    except (json.JSONDecodeError, ValueError):
+                        # 不是有效 JSON，保持原始字符串
+                        result[full_key] = value
+                else:
+                    result[full_key] = value
             elif value is None:
                 result[full_key] = None
             else:
