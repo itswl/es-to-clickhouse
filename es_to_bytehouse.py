@@ -549,11 +549,24 @@ ORDER BY (index_name)"""
             full_key = full_key.replace(".", "_").replace("-", "_").replace("@", "")
             
             if isinstance(value, dict):
+                # 嵌套对象，递归展平
                 nested = self.flatten_document(value, full_key)
                 result.update(nested)
             elif isinstance(value, list):
-                # 列表转为 JSON 字符串
-                result[full_key] = json.dumps(value, ensure_ascii=False)
+                # 列表处理：检查元素类型
+                if len(value) > 0 and isinstance(value[0], dict):
+                    # 如果列表元素是对象，展开为 fieldname_0_key, fieldname_1_key
+                    for idx, item in enumerate(value):
+                        if isinstance(item, dict):
+                            item_nested = self.flatten_document(item, f"{full_key}_{idx}")
+                            result.update(item_nested)
+                        else:
+                            # 如果列表中有非对象元素，转为 JSON
+                            result[full_key] = json.dumps(value, ensure_ascii=False)
+                            break
+                else:
+                    # 列表元素是简单类型，转为 JSON 字符串
+                    result[full_key] = json.dumps(value, ensure_ascii=False)
             elif value is None:
                 result[full_key] = None
             else:
@@ -615,7 +628,7 @@ ORDER BY (index_name)"""
                     if new_fields:
                         added = self.add_new_columns(table_name, new_fields)
                         if added > 0:
-                            logger.info(f"    发现并添加 {added} 个新字段")
+                            logger.info(f"    发现并添加 {added} 个新字段: {', '.join(list(new_fields.keys())[:5])}{'...' if len(new_fields) > 5 else ''}")
                     
                     self.insert_batch(table_name, batch)
                     total_migrated += len(batch)
@@ -680,8 +693,38 @@ ORDER BY (index_name)"""
         try:
             self.bytehouse_client.execute(sql, rows, types_check=True)
         except Exception as e:
-            logger.warning(f"    批量插入失败，尝试逐条插入: {e}")
-            # 尝试逐条插入
+            error_msg = str(e)
+            # 如果是列不存在错误，说明有字段没有被添加
+            if "No such column" in error_msg or "SQLSTATE: 42703" in error_msg:
+                logger.error(f"    插入失败：表中缺少列：{error_msg}")
+                # 重新加载表结构
+                self.load_table_columns(table_name)
+                # 检测并添加缺少的列
+                new_fields = self.detect_new_fields_from_batch(batch)
+                if new_fields:
+                    added = self.add_new_columns(table_name, new_fields)
+                    logger.info(f"    重试前添加了 {added} 个缺少的列")
+                    # 重新构建 columns 和 rows
+                    columns = sorted(list(self.current_table_columns - {"_timestamp"}))
+                    rows = []
+                    for row in batch:
+                        row_data = tuple(row.get(col) for col in columns)
+                        rows.append(row_data)
+                    columns_str = ", ".join(f"`{col}`" for col in columns)
+                    sql = f"INSERT INTO `{TARGET_DATABASE}`.`{table_name}` ({columns_str}) VALUES"
+                    # 重试插入
+                    try:
+                        self.bytehouse_client.execute(sql, rows, types_check=True)
+                        logger.info(f"    重试插入成功")
+                        return
+                    except Exception as e2:
+                        logger.error(f"    重试插入仍然失败: {e2}")
+                else:
+                    logger.error(f"    未检测到新字段，无法修复")
+            else:
+                logger.warning(f"    批量插入失败，尝试逐条插入: {e}")
+            
+            # 尝试逐条插入（用于其他类型错误）
             success = 0
             for i, row in enumerate(rows):
                 try:
