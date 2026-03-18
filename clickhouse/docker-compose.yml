@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  clickhouse-bytehouse-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile_clickhouse
+    container_name: clickhouse-bytehouse-sync
+    restart: unless-stopped
+    env_file:
+      - clickhouse_to_bytehouse.env
+    environment:
+      # 可在这里覆盖 .env 中的配置
+      TZ: Asia/Shanghai
+    volumes:
+      # 挂载日志目录
+      - ./logs:/app/logs
+    # 默认增量同步模式，每60秒检查一次
+    # table-pattern 从配置文件 TABLE_PATTERN 读取
+    command: ["--mode", "incremental", "--continuous", "--interval", "60"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    networks:
+      - sync-network
+
+networks:
+  sync-network:
+    driver: bridge

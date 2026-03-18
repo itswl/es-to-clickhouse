@@ -1,186 +1,254 @@
-# ES to ByteHouse 数据同步工具
+# ByteHouse 数据同步工具集
 
-将 Elasticsearch 数据同步到 ByteHouse（火山引擎版 ClickHouse），支持全量同步和持续增量同步。
+将多种数据源同步到 ByteHouse（火山引擎版 ClickHouse），支持全量同步和持续增量同步。
+
+## 支持的数据源
+
+| 数据源 | 目录 | 说明 |
+|--------|------|------|
+| Elasticsearch | `es/` | ES 索引同步到 ByteHouse |
+| ClickHouse | `clickhouse/` | ClickHouse 表同步到 ByteHouse |
+| MongoDB | `mongodb/` | MongoDB 集合同步到 ByteHouse |
 
 ## 功能特性
 
-- **全量同步**：首次运行时，扫描 ES 索引的全量数据并迁移到 ByteHouse
-- **增量同步**：基于时间戳字段，持续同步新增数据
-- **自动字段发现**：自动扫描 ES 数据，发现所有字段并创建对应的表结构
-- **Docker 部署**：支持 Docker/Docker Compose 一键部署
-- **配置灵活**：通过环境变量配置，无需修改代码
+- **全量同步**：首次运行时迁移全量数据
+- **增量同步**：基于时间戳/ID 字段持续同步新增数据
+- **auto 模式**：智能判断，首次全量后自动转增量，重启后跳过全量
+- **自动字段发现**：自动扫描源数据结构并创建目标表
+- **多表/多集合支持**：支持逗号分隔指定多个表或使用通配符
+- **飞书告警**：WARNING/ERROR 自动推送飞书通知
+- **Docker 部署**：支持 Docker Compose 一键部署
 
-## 快速开始
+## 目录结构
 
-### 1. 配置连接信息
+```
+bytehouse/
+├── README.md
+│
+├── es/                              # Elasticsearch → ByteHouse
+│   ├── es_to_bytehouse.py
+│   ├── requirements.txt
+│   ├── .env / .env.example
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── entrypoint.sh
+│
+├── clickhouse/                      # ClickHouse → ByteHouse
+│   ├── clickhouse_to_bytehouse.py
+│   ├── requirements.txt
+│   ├── clickhouse_to_bytehouse.env
+│   ├── Dockerfile_clickhouse
+│   └── docker-compose.yml
+│
+└── mongodb/                         # MongoDB → ByteHouse
+    ├── mongodb_to_bytehouse.py
+    ├── requirements.txt
+    ├── mongodb_to_bytehouse.env
+    ├── Dockerfile_mongodb
+    └── docker-compose-mongo.yaml
+```
 
-编辑 `.env` 文件：
+---
+
+## MongoDB 同步
+
+### 快速开始
 
 ```bash
-# Elasticsearch 配置
-ES_HOST=http://your-es-host:9200
-ES_USER=admin
-ES_PASSWORD=your-password
+cd mongodb
+
+# 1. 配置连接信息
+vim mongodb_to_bytehouse.env
+
+# 2. Docker Compose 启动
+docker-compose -f docker-compose-mongo.yaml up -d
+
+# 3. 查看日志
+docker-compose -f docker-compose-mongo.yaml logs -f
+```
+
+### 配置说明
+
+```bash
+# mongodb_to_bytehouse.env
+
+# MongoDB 配置
+MONGO_URI=mongodb://user:pass@host:port/?authSource=admin
+MONGO_DATABASE=mydb
 
 # ByteHouse 配置
-BYTEHOUSE_HOST=your-bytehouse-host.bytehouse.volces.com
-BYTEHOUSE_PORT=19000
-BYTEHOUSE_USER=bytehouse
-BYTEHOUSE_PASSWORD=your-password
-BYTEHOUSE_SECURE=true
+TARGET_BH_HOST=tenant-xxx.bytehouse.volces.com
+TARGET_BH_PORT=19000
+TARGET_BH_USER=bytehouse
+TARGET_BH_PASSWORD=xxx
+TARGET_BH_DATABASE=mongo_sync
 
 # 同步配置
-TARGET_DATABASE=es_migration
-INDEX_PATTERN=*
+COLLECTION_PATTERN=collection1,collection2,*_log   # 支持逗号分隔、通配符
+SYNC_BATCH_SIZE=1000
+INCREMENTAL_INTERVAL=60
+
+# 告警配置
+FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+```
+
+### 命令行用法
+
+```bash
+# auto 模式（推荐）：首次全量，之后持续增量
+python mongodb_to_bytehouse.py --mode auto
+
+# 全量同步
+python mongodb_to_bytehouse.py --mode full --collection-pattern "message_log"
+
+# 增量同步
+python mongodb_to_bytehouse.py --mode incremental --collection-pattern "message_log,user_log"
+
+# 查看同步状态
+python mongodb_to_bytehouse.py --mode status
+```
+
+---
+
+## ClickHouse 同步
+
+### 快速开始
+
+```bash
+cd clickhouse
+
+# 1. 配置连接信息
+vim clickhouse_to_bytehouse.env
+
+# 2. Docker Compose 启动
+docker-compose up -d
+```
+
+### 配置说明
+
+```bash
+# clickhouse_to_bytehouse.env
+
+# 源 ClickHouse 配置
+SOURCE_CH_HOST=192.168.1.100
+SOURCE_CH_PORT=9000
+SOURCE_CH_USER=default
+SOURCE_CH_PASSWORD=xxx
+SOURCE_CH_DATABASE=mydb
+
+# 目标 ByteHouse 配置
+TARGET_BH_HOST=tenant-xxx.bytehouse.volces.com
+TARGET_BH_PORT=19000
+TARGET_BH_USER=bytehouse
+TARGET_BH_PASSWORD=xxx
+TARGET_BH_DATABASE=ch_sync
+
+# 同步配置
+TABLE_PATTERN=spans,logs,*_events    # 支持逗号分隔、通配符
+SYNC_BATCH_SIZE=10000
 INCREMENTAL_INTERVAL=60
 ```
 
-### 2. Docker Compose 启动（推荐）
+### 命令行用法
 
 ```bash
-# 启动（全量 + 持续增量）
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-```
-
-### 3. Docker 直接运行
-
-```bash
-# 构建镜像
-docker build -t es-bytehouse-sync .
-
-# 运行（全量 + 持续增量）
-docker run -d --name es-sync --env-file .env es-bytehouse-sync
-
-# 仅增量同步（跳过全量）
-docker run -d --name es-sync --env-file .env -e SKIP_FULL_SYNC=true es-bytehouse-sync
-
-# 同步指定索引
-docker run -d --name es-sync --env-file .env -e INDEX_PATTERN=user_info_prod es-bytehouse-sync
-```
-
-### 4. 本地运行（不使用 Docker）
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
 # 全量同步
-python es_to_bytehouse.py --mode full
-
-# 单次增量同步
-python es_to_bytehouse.py --mode incremental
+python clickhouse_to_bytehouse.py --mode full
 
 # 持续增量同步
-python es_to_bytehouse.py --mode continuous --interval 60
+python clickhouse_to_bytehouse.py --mode incremental --continuous --interval 60
 
-# 同步指定索引
-python es_to_bytehouse.py --mode full --index user_info_prod
+# 指定时间字段和开始日期
+python clickhouse_to_bytehouse.py --mode incremental --time-column "created_at" --start-date "2026-03-01"
 
-# 列出所有索引
-python es_to_bytehouse.py --list-only
+# 查看同步状态
+python clickhouse_to_bytehouse.py --mode status
 ```
 
-## 环境变量说明
+---
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ES_HOST` | - | Elasticsearch 地址 |
-| `ES_USER` | admin | ES 用户名 |
-| `ES_PASSWORD` | - | ES 密码 |
-| `BYTEHOUSE_HOST` | - | ByteHouse 地址 |
-| `BYTEHOUSE_PORT` | 19000 | ByteHouse 端口 |
-| `BYTEHOUSE_USER` | bytehouse | ByteHouse 用户名 |
-| `BYTEHOUSE_PASSWORD` | - | ByteHouse 密码 |
-| `BYTEHOUSE_SECURE` | true | 是否使用 SSL |
-| `TARGET_DATABASE` | es_migration | 目标数据库名 |
-| `INDEX_PATTERN` | * | 要同步的索引模式，支持通配符 |
-| `INCREMENTAL_INTERVAL` | 60 | 增量同步间隔（秒）|
-| `SKIP_FULL_SYNC` | false | 是否跳过全量同步 |
-| `STORE_SOURCE` | false | 是否存储原始 _source JSON |
-| `BATCH_SIZE` | 1000 | 每批插入的数据量 |
-| `SCROLL_SIZE` | 1000 | ES 每次拉取的数据量 |
-| `LOG_LEVEL` | INFO | 日志级别: DEBUG, INFO, WARNING, ERROR |
+## Elasticsearch 同步
 
-## 日志说明
+### 快速开始
 
-日志输出格式: `时间 [级别] 消息`
+```bash
+cd es
 
-**日志级别**:
-- `DEBUG`: 最详细，包含 SQL 语句、字段扫描进度等
-- `INFO`: 标准级别，包含同步进度、耗时统计等
-- `WARNING`: 警告信息，如缺少时间字段
-- `ERROR`: 错误信息
+# 1. 配置连接信息
+vim .env
 
-**示例日志**:
-```
-2026-01-27 18:22:45 [INFO] ============================================================
-2026-01-27 18:22:45 [INFO] ES to ByteHouse 增量同步
-2026-01-27 18:22:45 [INFO] ============================================================
-2026-01-27 18:22:45 [INFO] 模式: 单次同步
-2026-01-27 18:22:45 [INFO] 索引模式: user_info_prod
-2026-01-27 18:22:45 [INFO] 正在连接 Elasticsearch: http://your-es-host:9200
-2026-01-27 18:22:45 [INFO] ✓ ES 连接成功
-2026-01-27 18:22:45 [INFO]   集群名称: my-cluster
-2026-01-27 18:22:45 [INFO]   集群状态: green
-2026-01-27 18:22:45 [INFO]   节点数量: 7
-2026-01-27 18:22:46 [INFO] ✓ ByteHouse 连接成功
-2026-01-27 18:22:46 [INFO] [第 1 轮] 开始增量同步 (2026-01-27 18:22:46)
-2026-01-27 18:22:46 [INFO] 检查索引: user_info_prod
-2026-01-27 18:22:46 [INFO]   发现 19 条增量数据
-2026-01-27 18:22:46 [INFO]   已同步 19/19 条
-2026-01-27 18:22:47 [INFO]   ✓ 增量同步完成: 19 条，耗时 0.8s
-2026-01-27 18:22:47 [INFO] [第 1 轮] 同步完成，本轮共同步 19 条
+# 2. Docker Compose 启动
+docker-compose up -d
 ```
 
-## 数据结构
+### 配置说明
 
-同步后的表结构：
+```bash
+# .env
 
-- `_id`: ES 文档 ID
-- `_source`: 原始 JSON 文档（完整保留）
-- `_timestamp`: 同步时间戳
-- 其他字段: ES 文档的展平字段（嵌套字段用下划线连接）
+# ES 配置
+ES_HOST=http://es-host:9200
+ES_USER=admin
+ES_PASSWORD=xxx
 
-## 查询示例
+# ByteHouse 配置
+BYTEHOUSE_HOST=tenant-xxx.bytehouse.volces.com
+BYTEHOUSE_PORT=19000
+BYTEHOUSE_USER=bytehouse
+BYTEHOUSE_PASSWORD=xxx
 
-```sql
--- 查看记录数
-SELECT count() FROM es_migration.user_info_prod;
-
--- 查询展平字段
-SELECT _id, user_id, username, first_chat_time 
-FROM es_migration.user_info_prod 
-LIMIT 10;
-
--- 查看同步状态
-SELECT * FROM es_migration._sync_state ORDER BY updated_at DESC;
+# 同步配置
+TARGET_DATABASE=es_migration
+INDEX_PATTERN=user_*,order_*         # 支持通配符
+INCREMENTAL_INTERVAL=60
+SKIP_FULL_SYNC=false
 ```
 
-## 文件结构
+---
 
+## 同步模式说明
+
+| 模式 | 说明 |
+|------|------|
+| `full` | 全量同步，清空目标表后重新导入 |
+| `incremental` | 增量同步，基于时间字段或 _id 同步新数据 |
+| `auto` | 智能模式：首次全量，之后持续增量，重启后自动跳过全量 |
+| `status` | 查看同步状态 |
+
+## 表/集合匹配语法
+
+支持逗号分隔多个模式和通配符：
+
+```bash
+# 单个
+COLLECTION_PATTERN=message_log
+
+# 多个（逗号分隔）
+COLLECTION_PATTERN=message_log,user_log,order_log
+
+# 通配符
+COLLECTION_PATTERN=*_log
+
+# 混合
+COLLECTION_PATTERN=message_log,*_event,user_*
 ```
-├── .env                  # 配置文件
-├── .dockerignore         # Docker 忽略文件
-├── Dockerfile            # Docker 镜像定义
-├── docker-compose.yml    # Docker Compose 配置
-├── entrypoint.sh         # Docker 启动脚本
-├── es_to_bytehouse.py    # 同步脚本
-├── requirements.txt      # Python 依赖
-└── README.md             # 说明文档
-```
+
+## 飞书告警
+
+配置 `FEISHU_WEBHOOK` 后，所有 WARNING 和 ERROR 级别日志会自动推送到飞书：
+
+- ⚠️ WARNING：连接重试、数据异常等
+- ❌ ERROR：同步失败、连接断开等
+
+相同错误 1 分钟内只发送一次，防止刷屏。
 
 ## 注意事项
 
-1. **时间字段**：增量同步依赖时间字段（如 `timestamp`、`@timestamp`），确保 ES 数据中有时间字段
-2. **字段类型**：所有字段统一存储为 String 类型，避免类型转换问题
-3. **大数据量**：对于超大索引（如 TB 级），建议分批同步或增大 `BATCH_SIZE`
-4. **网络**：确保 Docker 容器能访问 ES 和 ByteHouse 的网络
+1. **ByteHouse 表创建延迟**：表创建后需等待 5 秒才能插入数据
+2. **增量字段**：MongoDB 默认使用 `_id`，ClickHouse/ES 需指定时间字段
+3. **字段类型**：所有字段统一存储为 String 类型，嵌套对象转为 JSON 字符串
+4. **网络访问**：确保 Docker 容器能访问源数据库和 ByteHouse
 
 ## License
 

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  mongodb-bytehouse-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile_mongodb
+    container_name: mongodb-bytehouse-sync
+    restart: unless-stopped
+    env_file:
+      - mongodb_to_bytehouse.env
+    environment:
+      # 可在这里覆盖 .env 中的配置
+      TZ: Asia/Shanghai
+    volumes:
+      # 挂载日志目录
+      - ./logs:/app/logs
+    # 默认 auto 模式：先全量后持续增量
+    # collection-pattern 从配置文件 COLLECTION_PATTERN 读取
+    command: ["--mode", "auto", "--interval", "60"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    networks:
+      - sync-network
+
+networks:
+  sync-network:
+    driver: bridge

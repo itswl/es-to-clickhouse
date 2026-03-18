@@ -23,7 +23,6 @@ share/python-wheels/
 MANIFEST
 
 # Virtual Environments
-.env
 .venv
 env/
 venv/
@@ -33,6 +32,12 @@ venv.bak/
 
 # Logs
 *.log
+logs/
+
+# 敏感配置文件（包含密码）
+.env
+*.env
+!*.env.example
 
 # Docker
 .docker
