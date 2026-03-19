@@ -586,6 +586,25 @@ SETTINGS index_granularity = 8192
         # 加载表列信息
         self.load_table_columns(table_name)
         
+        # 如果表不存在，需要先创建表
+        if not self.current_table_columns:
+            logger.info(f"  目标表不存在，先扫描字段并创建表")
+            # 采样扫描字段
+            sample_docs = list(collection.find().limit(100))
+            if not sample_docs:
+                logger.warning(f"  集合 {collection_name} 为空，跳过")
+                return 0
+            fields = {}
+            for doc in sample_docs:
+                flat_doc = self.flatten_document(doc)
+                for field_name, value in flat_doc.items():
+                    if field_name not in fields:
+                        fields[field_name] = self.infer_type(value)
+            # 创建表
+            if not self.create_target_table(table_name, fields):
+                logger.error(f"  创建表失败，跳过集合 {collection_name}")
+                return 0
+        
         # 获取上次同步状态
         last_id, last_time = self.get_last_sync_state(collection_name)
         
